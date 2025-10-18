@@ -3,14 +3,20 @@ from aiogram.types import (InlineKeyboardButton,
                            KeyboardButton,
                            ReplyKeyboardMarkup)
 
-def createCardKeyboard(dict_of_dicts:dict):
+def createCardKeyboard(dict_of_dicts:list):
     keyboard = InlineKeyboardMarkup(inline_keyboard =[
                                     [InlineKeyboardButton(text=f"{student['name']} {student['surname']}", callback_data=f'card:{id}')]
-                                    for id, student in dict_of_dicts.items() if student['name'] and student['surname']
+                                    for id, student in dict_of_dicts if student['name'] and student['surname']
                                     ])
+
+    next = InlineKeyboardButton(text='Далее', callback_data='next:card')
+
+    back = InlineKeyboardButton(text='Назад', callback_data='back:card')
 
     exit = InlineKeyboardButton(text='Выход', callback_data='exit:card')
 
+    keyboard.inline_keyboard.append([next])
+    keyboard.inline_keyboard.append([back])
     keyboard.inline_keyboard.append([exit])
 
     return keyboard

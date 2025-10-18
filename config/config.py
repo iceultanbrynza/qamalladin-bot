@@ -18,6 +18,8 @@ from aiogram.fsm.storage.redis import RedisStorage
 from dotenv import load_dotenv
 load_dotenv()
 
+OFFSET = 1
+
 redis_client = redis.Redis(
         host=os.getenv('HOST'),
         port=os.getenv('PORT'),

@@ -5,7 +5,7 @@ from google.cloud.firestore import Client
 
 async def is_registered(username, db:Client, position: UserRole)->bool:
     role = await get_role(username, db)
-    return True if role == position else False
+    return True if role == position or role == UserRole.CURATOR else False
 
 async def get_role(username, db:Client):
     students, curators = await authorize(db)

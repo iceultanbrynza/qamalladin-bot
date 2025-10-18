@@ -1,5 +1,6 @@
 from utilities.keyboard import createCardKeyboard, createAdminPanel
 from utilities.database_async import query_students_async, query_card_async, write_qcoins_async
+from utilities.other import get_dict_with_offset
 from lexicon import lexicon
 from filters import IsInteger, IsFioQcoins
 from fsm import Form
@@ -19,16 +20,66 @@ router = Router()
 # Карточки студентов
 @router.message(F.text == '👥 Студенты')
 async def get_students(message:Message, state: FSMContext, db):
+    start = 0
     username = message.from_user.username
     is_curator = await is_registered(username, db, UserRole.CURATOR)
 
     if is_curator:
         await state.set_state(Form.student_card)
-        await state.update_data(message_id=message.message_id)
+        await state.update_data(message_id=message.message_id, start=start)
 
-        students = await query_students_async(db)
+        data = await query_students_async(db)
+        students = await get_dict_with_offset(data, start)
         keyboard = createCardKeyboard(students)
         await message.answer('Список карточек студентов:', reply_markup=keyboard)
+
+@router.callback_query(F.data.startswith('next:card'), StateFilter(Form.student_card,
+                                                                   Form.student_choosing_for_accrual,
+                                                                   Form.accrual,
+                                                                   Form.student_choosing_for_fine,
+                                                                   Form.fine))
+async def get_next_students(callback: CallbackQuery, state: FSMContext, db):
+    data = await state.get_data()
+    start = int(data.get('start', ''))
+    message_id = data.get('message_id', '')
+
+    data = await query_students_async(db)
+    students = await get_dict_with_offset(data, start+1)
+    keyboard = createCardKeyboard(students)
+
+    if start == '' or message_id == '':
+        callback.message.answer('Вы не можете использовать эту функцию')
+        return
+    else:
+        chat_id = callback.message.chat.id
+        await callback.message.bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id+1, reply_markup=keyboard)
+        await state.update_data(start=start+1)
+
+    await callback.answer()
+
+@router.callback_query(F.data.startswith('back:card'), StateFilter(Form.student_card,
+                                                                   Form.student_choosing_for_accrual,
+                                                                   Form.accrual,
+                                                                   Form.student_choosing_for_fine,
+                                                                   Form.fine))
+async def get_previous_students(callback: CallbackQuery, state: FSMContext, db):
+    data = await state.get_data()
+    start = int(data.get('start', ''))
+    message_id = data.get('message_id', '')
+
+    if start>=1:
+        data = await query_students_async(db)
+        students = await get_dict_with_offset(data, start-1)
+        keyboard = createCardKeyboard(students)
+
+        if start == '' or message_id == '':
+            callback.message.answer('Вы не можете использовать эту функцию')
+            return
+        else:
+            chat_id = callback.message.chat.id
+            await callback.message.bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id+1, reply_markup=keyboard)
+            await state.update_data(start=start-1)
+    await callback.answer()
 
 @router.callback_query(F.data.startswith('card:'), StateFilter(Form.student_card))
 async def get_card(callback:CallbackQuery, state: FSMContext, db):
@@ -54,14 +105,16 @@ async def get_card(callback:CallbackQuery, state: FSMContext, db):
 # Начисление Qcoins
 @router.message(F.text == "💰 Начислить Qcoins")
 async def give_coins(message: Message, state: FSMContext, db):
+    start=0
     username = message.from_user.username
     is_curator = await is_registered(username, db, UserRole.CURATOR)
 
     if is_curator:
         await state.set_state(Form.student_choosing_for_accrual)
-        await state.update_data(message_id=message.message_id)
+        await state.update_data(message_id=message.message_id, start=start)
 
-        students = await query_students_async(db)
+        data = await query_students_async(db)
+        students = await get_dict_with_offset(data, start)
         keyboard = createCardKeyboard(students)
         await message.answer('Выберите студента, которому начислить Qcoins или наберите ФИО вручную по шаблону "Имя Фамилия Qcoins" (можно начислить сразу нескольким, написав через Enter)', reply_markup=keyboard)
 
@@ -72,7 +125,10 @@ async def accrual(callback:CallbackQuery, state:FSMContext, db):
     await state.update_data(student_id=student_id)
 
     await callback.message.answer("Введите количество баллов для этого студента:")
+    data = await state.get_data()
+    start = data.get('start')
     await state.set_state(Form.accrual)
+    await state.update_data(start=start)
     await callback.answer()
 
 @router.message(F.text, IsFioQcoins(), StateFilter(Form.student_choosing_for_accrual))
@@ -94,20 +150,21 @@ async def writing_accrual(message: Message, state:FSMContext, db):
         await message.answer(f"В сообщении нет числа")
     await write_qcoins_async(int(qcoins.group()), db, student_id=student_id)
     await message.answer(f"✅ Начислено {int(qcoins.group())} Qcoins студенту {student_id}")
-    # await state.clear()
-
+    await state.set_state(Form.student_choosing_for_accrual)
 
 # Выдача штрафов
 @router.message(F.text=='🚫 Выдать штраф')
 async def give_fine(message: Message, state: FSMContext, db):
+    start = 0
     username = message.from_user.username
     is_curator = await is_registered(username, db, UserRole.CURATOR)
 
     if is_curator:
         await state.set_state(Form.student_choosing_for_fine)
-        await state.update_data(message_id=message.message_id)
+        await state.update_data(message_id=message.message_id, start=start)
 
-        students = await query_students_async(db)
+        data = await query_students_async(db)
+        students = await get_dict_with_offset(data, start)
         keyboard = createCardKeyboard(students)
         await message.answer('Выберите студента, которого необходимо оштрафовать или наберите ФИО вручную по шаблону "Имя Фамилия Qcoins" (можно начислить сразу нескольким, написав через Enter)', reply_markup=keyboard)
 
@@ -118,7 +175,10 @@ async def fine(callback:CallbackQuery, state:FSMContext, db):
     await state.update_data(student_id=student_id)
 
     await callback.message.answer("Введите штраф (количество Qcoins):")
+    data = await state.get_data()
+    start = data.get('start')
     await state.set_state(Form.fine)
+    await state.update_data(start=start)
     await callback.answer()
 
 @router.message(F.text, IsFioQcoins(), StateFilter(Form.student_choosing_for_fine))
@@ -140,7 +200,7 @@ async def writing_fine(message: Message, state:FSMContext, db):
         await message.answer(f"В сообщении нет числа")
     await write_qcoins_async(-int(qcoins.group()), db, student_id=student_id)
     await message.answer(f"✅ Студент {student_id} оштрафован на {int(qcoins.group())}")
-
+    await state.set_state(Form.student_choosing_for_fine)
 
 # Выход
 @router.callback_query(F.data.startswith('exit'))
@@ -155,8 +215,12 @@ async def exit(callback: CallbackQuery, state:FSMContext, db):
 
     else:
         chat_id = callback.message.chat.id
-        await callback.message.bot.delete_message(chat_id=chat_id, message_id=message_id)
-        await callback.message.bot.delete_message(chat_id=chat_id, message_id=message_id+1)
+
+        try:
+            await callback.message.bot.delete_message(chat_id=chat_id, message_id=message_id)
+            await callback.message.bot.delete_message(chat_id=chat_id, message_id=message_id+1)
+        except:
+            pass
 
     await callback.message.answer(text='Вы вышли.', reply_markup=keyboard)
     await callback.answer()
