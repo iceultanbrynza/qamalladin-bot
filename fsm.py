@@ -9,5 +9,6 @@ class Form(StatesGroup):
     student_choosing_for_fine = State()
     fine = State()
 
+    get_report = State()
 
     send_report = State()

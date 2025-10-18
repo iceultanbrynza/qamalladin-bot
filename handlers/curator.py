@@ -202,6 +202,24 @@ async def writing_fine(message: Message, state:FSMContext, db):
     await message.answer(f"✅ Студент {student_id} оштрафован на {int(qcoins.group())}")
     await state.set_state(Form.student_choosing_for_fine)
 
+
+# Смотреть отчеты студентов
+@router.message(F.text == "📈 Отчеты")
+async def get_report(message: Message, state: FSMContext, db):
+    start = 0
+    username = message.from_user.username
+    is_curator = await is_registered(username, db, UserRole.CURATOR)
+
+    if is_curator:
+        await state.set_state(Form.get_report)
+        await state.update_data(message_id=message.message_id, start=start)
+        data = await query_students_async(db)
+        students = await get_dict_with_offset(data, start)
+        keyboard = createCardKeyboard(students)
+        await message.answer(lexicon['ru']['curator']['Curator asks to get report'], reply_markup=keyboard)
+
+
+
 # Выход
 @router.callback_query(F.data.startswith('exit'))
 async def exit(callback: CallbackQuery, state:FSMContext, db):
