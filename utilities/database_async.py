@@ -50,9 +50,17 @@ async def query_card_async(db: Client, id: str=None, telegram:str=None):
 async def write_qcoins_async(qcoins:int, db: Client, mode='id', student_id=None, name = None, surname = None):
     await asyncio.to_thread(write_qcoins, qcoins, db, mode, student_id, name , surname)
 
-async def send_task_async(db: Client, username, task_id, file):
-    await asyncio.to_thread(send_task, db, username, task_id, file)
+async def send_task_async(db: Client, username, task_id, file, student_id, file_type):
+    await asyncio.to_thread(send_task, db, username, task_id, file, student_id, file_type)
 
-async def retrieve_tasks_async(db:Client, level:str)->dict:
-    tasks:dict = await asyncio.to_thread(retrieve_task, db, level)
+async def retrieve_tasks_async(db:Client, level:str, faculty:str)->dict:
+    tasks:dict = await asyncio.to_thread(retrieve_task, db, level, faculty)
     return tasks
+
+async def retrieve_report_async(db: Client, student_id:str):
+    reports:dict = await asyncio.to_thread(retrieve_report, db, student_id)
+    return reports
+
+async def get_student_id_async(db:Client, username):
+    student_id = await asyncio.to_thread(get_student_id, db, username)
+    return student_id

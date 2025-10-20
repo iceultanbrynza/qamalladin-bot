@@ -39,3 +39,7 @@ def createInlineTaskButton(id):
     keyboard = InlineKeyboardMarkup(inline_keyboard =
                                     [[InlineKeyboardButton(text="Сделать эту задачу", callback_data=f'report:{id}')]])
     return keyboard
+
+def assessReport(id):
+    button = InlineKeyboardButton(text='Далее', callback_data='card:')
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[button]])

@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OFFSET = 1
+ALLOWED_FILE_TYPES = ['pdf', 'photo', 'video']
 
 redis_client = redis.Redis(
         host=os.getenv('HOST'),

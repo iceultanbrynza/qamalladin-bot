@@ -1,18 +1,36 @@
-from utilities.keyboard import createCardKeyboard, createAdminPanel
-from utilities.database_async import query_students_async, query_card_async, write_qcoins_async
-from utilities.other import get_dict_with_offset
+from utilities.keyboard import (
+    createCardKeyboard,
+    createAdminPanel
+)
+from utilities.database_async import (
+    query_students_async,
+    query_card_async,
+    write_qcoins_async,
+    retrieve_report_async
+)
+from utilities.other import (
+    get_dict_with_offset,
+    get_file_type
+)
 from lexicon import lexicon
 from filters import IsInteger, IsFioQcoins
 from fsm import Form
 from utilities.authorizing import is_registered, UserRole
 
 import re
-import asyncio
+import requests
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
+from aiogram.types import (
+    InputMediaPhoto,
+    InputMediaVideo,
+    InputFile,
+    InputMediaDocument
+)
+from aiogram.types.input_file import FSInputFile, URLInputFile
 
 router = Router()
 
@@ -37,7 +55,8 @@ async def get_students(message:Message, state: FSMContext, db):
                                                                    Form.student_choosing_for_accrual,
                                                                    Form.accrual,
                                                                    Form.student_choosing_for_fine,
-                                                                   Form.fine))
+                                                                   Form.fine,
+                                                                   Form.get_report))
 async def get_next_students(callback: CallbackQuery, state: FSMContext, db):
     data = await state.get_data()
     start = int(data.get('start', ''))
@@ -61,7 +80,8 @@ async def get_next_students(callback: CallbackQuery, state: FSMContext, db):
                                                                    Form.student_choosing_for_accrual,
                                                                    Form.accrual,
                                                                    Form.student_choosing_for_fine,
-                                                                   Form.fine))
+                                                                   Form.fine,
+                                                                   Form.get_report))
 async def get_previous_students(callback: CallbackQuery, state: FSMContext, db):
     data = await state.get_data()
     start = int(data.get('start', ''))
@@ -218,7 +238,43 @@ async def get_report(message: Message, state: FSMContext, db):
         keyboard = createCardKeyboard(students)
         await message.answer(lexicon['ru']['curator']['Curator asks to get report'], reply_markup=keyboard)
 
+@router.callback_query(F.data.startswith('card:'), StateFilter(Form.get_report,
+                                                               Form.student_choosing_for_accrual))
+async def fetch_report(callback: CallbackQuery, state:FSMContext, db):
+    student_id = str(callback.data.split(':')[1])
+    chat_id = callback.message.chat.id
+    reports = await retrieve_report_async(db, student_id)
+    for task_id, content in reports.items():
+        answer = {}
+        is_checked = content.pop('is_checked', None)
+        info = [
+            task_id,
+            is_checked
+        ]
+        text = lexicon['ru']['curator']['Curator obtained report'].format(*info)
 
+        answer['text'] = text
+
+        # if not is_checked:
+        #     keyboard =
+
+        await callback.message.answer(**answer)
+
+        media = []
+        for key, value in content.items():
+            if value[1] in ['jpg', 'jpeg', 'png']:
+                file = InputMediaPhoto(media=value[0])
+                media.append(file)
+            elif value[1] in ['mp4', 'mov']:
+                file = InputMediaVideo(media=value[0])
+                media.append(file)
+            elif value[1] in ['pdf']:
+                await callback.bot.send_document(chat_id, URLInputFile(url=value[0], filename='document.pdf'))
+            elif value[1]=='heic':
+                await callback.bot.send_document(chat_id, URLInputFile(url=value[0], filename='photo.heic'))
+        if media:
+            for i in range(0, len(media), 10):
+                await callback.bot.send_media_group(chat_id, media[i:i+10])
 
 # Выход
 @router.callback_query(F.data.startswith('exit'))
@@ -249,3 +305,5 @@ async def exit(callback: CallbackQuery, state:FSMContext, db):
 @router.callback_query(F.data.startswith('card:'), StateFilter(None))
 async def callback_no_state(callback:CallbackQuery, state:FSMContext, db):
     await callback.answer('Выберите действие')
+
+router.message.register()

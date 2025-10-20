@@ -16,4 +16,16 @@ cloudinary.config(
   api_secret = os.getenv('API_SECRET')
 )
 
-cloudinary.uploader.upload(file='https://i.pinimg.com/736x/40/ca/92/40ca92ad3db301e2e7e659d99837fe0c.jpg', asset_folder='emilio/level1/task1')
+info = cloudinary.api.resource("25IT777B1SN120251019_011017")
+print(info['secure_url'])
+url = cloudinary.utils.cloudinary_url("25IT777B1SN120251019_011914", resource_type='raw')[0]
+l = url.split('/')
+print(url.split('/'))
+public_id = l[-1]
+print(l[-1])
+l[-1] = f'fl_attachment:{public_id}.pdf'
+l.append(public_id)
+new_url = '/'.join(l)
+print(new_url)
+
+print(url+'.pdf')

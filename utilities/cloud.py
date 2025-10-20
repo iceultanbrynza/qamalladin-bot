@@ -11,15 +11,25 @@ import cloudinary.api
 from cloudinary import CloudinaryImage
 from cloudinary import CloudinaryVideo
 
-def upload_file(file:BytesIO, username, task, public_id):
+def upload_file(file:BytesIO, username, task, public_id, format):
     month = datetime.now().strftime("%B")
     folder_path = f'{username}/{month}/{task}'
     response = cloudinary.uploader.upload(file,
                                           asset_folder=folder_path,
-                                          resource_type="auto",
+                                          resource_type='auto',
                                           public_id=public_id)
-
     return response
+
+def get_url(public_id:str):
+    try:
+        info = cloudinary.api.resource(public_id)
+        url = info.get('secure_url', '')
+        format = info.get('format')
+    except:
+        info = cloudinary.api.resource(public_id, resource_type="video")
+        url = info.get('secure_url', '')
+        format = info.get('format')
+    return (url, format)
 
 pool = ThreadPoolExecutor(max_workers=5)
 
