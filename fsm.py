@@ -19,3 +19,5 @@ class Form(StatesGroup):
     add_students = State() #Curator is about to send list of new students to add
 
     update_levels = State() #Curator is about to send list of new levels in place of already existed
+
+    add_tasks = State() #Curator is about to add new tasks

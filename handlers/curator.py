@@ -16,7 +16,8 @@ from utilities.database_async import (
     add_students_async,
     is_balance_per_level_enough,
     add_levels_async,
-    rewrite_cached_students
+    rewrite_cached_students,
+    add_task_async
 )
 from utilities.other import (
     get_dict_with_offset,
@@ -29,7 +30,7 @@ from utilities.authorizing import is_registered, UserRole
 
 import re
 from datetime import datetime
-import pytz
+import asyncio
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
@@ -353,6 +354,7 @@ async def writing_assess(message: Message, state:FSMContext, db):
     await message.answer(f"✅ Начислено {int(qcoins.group())} Qcoins студенту {student_id}")
 
 
+# Логгирование
 @router.message(F.text == '🗒️ Лог действий')
 async def get_log(message: Message, state:FSMContext, db):
     username = message.from_user.username
@@ -428,6 +430,8 @@ async def get_log_text(logs):
     text+="</pre>"
     return text
 
+
+# Добавление новых студентов
 @router.message(F.text == '👨‍🎓 Добавить студентов')
 async def add_students(message: Message, state:FSMContext, db):
     username = message.from_user.username
@@ -534,6 +538,67 @@ async def handle_document(message: Message, db):
         text = lexicon['ru']['curator']['didnt add levels']
 
     await message.answer(text)
+
+
+# Добавление новых задач
+@router.message(F.text == '📥 Добавить задачу')
+async def add_tasks(message: Message, state:FSMContext, db):
+    username = message.from_user.username
+
+    is_curator = await is_registered(username, db, UserRole.CURATOR)
+
+    if is_curator:
+        message_id = message.message_id
+        await state.set_state(Form.add_tasks)
+        await state.update_data(message_id=message_id)
+        text = lexicon['ru']['curator']['add task response']
+        keyboard = exitKeyboard()
+        answer = {
+            "text": text,
+            "reply_markup": keyboard
+        }
+        await message.answer(**answer)
+
+@router.message(F.document, StateFilter(Form.add_tasks))
+async def handle_document(message: Message, state:FSMContext, db):
+    document = message.document
+    file_type = await get_file_type(message)
+    file = await message.bot.download(document)
+    tasks = []
+    error = 0
+    if file_type == 'excel':
+        try:
+            df = pd.read_excel(file)
+            preview = df.head().to_string()
+            await message.answer(f"✅ Файл получен!\n\nПервые строки:\n<pre>{preview}</pre>", parse_mode="HTML")
+
+            for index, row in df.iterrows():
+                faculty = row['Факультет']
+                level = row['Уровень']
+                block = row['Блок']
+                number = row['Номер']
+                content = row['Контент']
+
+                if (pd.notna(level) and
+                    pd.notna(faculty) and
+                    pd.notna(block) and
+                    pd.notna(number) and
+                    pd.notna(content)):
+
+                    tasks.append(add_task_async(db, faculty, level, block, number, content))
+
+                else:
+                    await message.answer(f"⚠️ Ошибка при чтении файла:\n")
+                    return
+
+        except Exception as e:
+            await message.answer(f"⚠️ Ошибка при чтении файла:\n{e}")
+            return
+
+        await asyncio.gather(*tasks)
+        text = lexicon['ru']['curator']['add tasks']
+        await message.answer(text)
+
 
 # Выход
 @router.callback_query(F.data.startswith('exit'))

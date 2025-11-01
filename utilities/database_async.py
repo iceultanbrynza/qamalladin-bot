@@ -125,3 +125,21 @@ async def add_levels_async(db:Client, levels:str):
 
     await asyncio.gather(*tasks)
     return True
+
+
+async def add_task_async(db, faculty, level, block, number, content):
+    await asyncio.to_thread(add_task, db, faculty, level, block, number, content)
+
+# async def add_tasks_async(db:Client, tasks:str):
+#     lines = tasks.strip().split('\n')
+
+#     tasks_for_loop = []
+#     for line in lines:
+#         task = line.strip().split(' ')
+#         if len(task) == 5:
+#             tasks_for_loop.append(add_task_async(db, task))
+#         else:
+#             return False
+
+#     await asyncio.gather(*tasks_for_loop)
+#     return True

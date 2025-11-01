@@ -24,8 +24,17 @@ async def get_file_type(message: Message):
         file_type = "other"
     return file_type
 
+# проверка памяти
+
 def generate_id(year, faculty:str):
     code = random.randrange(start=10000, stop=99999)
     year = year - 2000
     id = f"{year}{faculty}{code}"
+    return id
+
+def generate_task_id(faculty:str, level:str, block:str, number:str):
+    f = faculty.strip()[0]
+    b = block.strip()[0]
+
+    id = f + str(level) + b + str(number)
     return id

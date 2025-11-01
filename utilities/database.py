@@ -1,7 +1,10 @@
 from lexicon import lexicon
 from config import LOG_OFFSET
 from qutypes import ProgressResult
-from .other import generate_id
+from .other import (
+    generate_id,
+    generate_task_id
+)
 
 from .cloud import upload_file, get_url
 
@@ -356,4 +359,20 @@ def add_level(db:Client, level):
 
     db.collection('levels')\
       .document(str(number))\
+      .set(document_data)
+
+def add_task(db:Client, faculty, level, block, number, content):
+    id = generate_task_id(faculty, level, block, number)
+
+    document_data = {
+        'number': int(number),
+        'content': content,
+        'block': block,
+        'id': id
+    }
+
+    db.collection('tasks')\
+      .document(faculty)\
+      .collection(str(level))\
+      .document(id)\
       .set(document_data)
