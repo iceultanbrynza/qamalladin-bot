@@ -5,7 +5,6 @@ from config import redis_client
 from lexicon import lexicon
 
 import json
-import asyncio
 
 from aiogram import Router, F
 from aiogram.types import Message

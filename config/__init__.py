@@ -1,1 +1,1 @@
-from .config import load_config, BotConfig, redis_client, UserRole, OFFSET, ALLOWED_FILE_TYPES
+from .config import load_config, BotConfig, redis_client, UserRole, OFFSET, ALLOWED_FILE_TYPES, LOG_OFFSET

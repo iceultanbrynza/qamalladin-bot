@@ -1,4 +1,11 @@
-from utilities.database_async import query_card_async, send_task_async, retrieve_tasks_async, get_student_id_async
+from utilities.database_async import (
+    query_card_async,
+    send_task_async,
+    retrieve_tasks_async,
+    get_student_id_async,
+    write_log_async
+)
+
 from utilities.authorizing import is_registered, UserRole
 from utilities.keyboard import createInlineTaskButton
 from utilities.other import get_file_type
@@ -23,10 +30,10 @@ async def my_card(message: Message, state: FSMContext, db):
     username = message.from_user.username
     is_student = await is_registered(username, db, UserRole.STUDENT)
     if is_student:
-        username = message.from_user.username
         document = await query_card_async(db, telegram=username)
         if not document:
             await message.answer(text="Студент не найден")
+            return
 
         info = [document['name'],
                 document['surname'],
@@ -48,7 +55,8 @@ async def sends_tasks(message: Message, state: FSMContext, db):
         document = await query_card_async(db, telegram=username)
         if not document:
             await message.answer(text="Студент не найден")
-
+            return
+        
         level = str(document.get('level', ''))
         faculty = str(document.get('faculty', ''))
 
@@ -71,7 +79,7 @@ async def send_report(callback: CallbackQuery, state: FSMContext, db):
     task_id = str(callback.data.split(':')[1])
     await state.update_data(task_id=task_id)
 
-    await callback.message.answer('Вышлите Фото/Видео/PDF')
+    await callback.message.answer('Вышлите Фото/Видео/PDF в виде файла')
 
 @router.message(F.document, StateFilter(Form.send_report))
 async def handle_document(message: Message, state: FSMContext, db):
@@ -80,10 +88,6 @@ async def handle_document(message: Message, state: FSMContext, db):
         task_id_dict = await state.get_data()
         task_id = task_id_dict.get('task_id')
         username = message.from_user.username
-        document = await query_card_async(db, telegram=username)
-        if not document:
-            await message.answer(text="Студент не найден")
-
         student_id = await get_student_id_async(db, username)
         doc = message.document
         file_id = doc.file_id
@@ -92,6 +96,7 @@ async def handle_document(message: Message, state: FSMContext, db):
         file_bytes.seek(0)
 
         await send_task_async(db, username, task_id, file_bytes, student_id, file_type)
+        await write_log_async(db, student_id, task_id)
         await message.answer('Ваш ответ сохранен')
 
     else:

@@ -1,5 +1,8 @@
 from config import OFFSET
 
+import random
+import json
+
 from aiogram.types import Message
 
 async def get_dict_with_offset(dict:dict, start:int):
@@ -14,6 +17,15 @@ async def get_file_type(message: Message):
         file_type = "video"
     elif mime_type == "application/pdf":
         file_type = "pdf"
+    elif mime_type in ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       "application/vnd.ms-excel",]:
+        file_type = "excel"
     else:
         file_type = "other"
     return file_type
+
+def generate_id(year, faculty:str):
+    code = random.randrange(start=10000, stop=99999)
+    year = year - 2000
+    id = f"{year}{faculty}{code}"
+    return id

@@ -18,7 +18,8 @@ from aiogram.fsm.storage.redis import RedisStorage
 from dotenv import load_dotenv
 load_dotenv()
 
-OFFSET = 1
+OFFSET = 10
+LOG_OFFSET = 2
 ALLOWED_FILE_TYPES = ['pdf', 'photo', 'video']
 
 redis_client = redis.Redis(
@@ -63,7 +64,9 @@ def load_config()->BotConfig:
         token=os.getenv('BOT_TOKEN'),
         database=db,
         admins=[int(admin.strip()) for admin in os.getenv('ADMINS', '').split(',') if admin.strip().isdigit()],
-        storage=RedisStorage(redis=redis_client)
+        storage=RedisStorage(redis=redis_client,
+                             state_ttl=3600,
+                             data_ttl=3600)
     )
 
     return config
