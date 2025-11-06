@@ -12,8 +12,6 @@ class Form(StatesGroup):
     get_report = State() #Curator is about to choose student whose report he wants to see
     assess_report = State() #Curator is about to assess the report
 
-    send_report = State()
-
     get_log = State() #Curator is about to choose to see next n logs
 
     add_students = State() #Curator is about to send list of new students to add
@@ -21,3 +19,10 @@ class Form(StatesGroup):
     update_levels = State() #Curator is about to send list of new levels in place of already existed
 
     add_tasks = State() #Curator is about to add new tasks
+
+    add_goods = State()
+
+
+    send_report = State() # Student is about to send report
+    get_student_log = State() #Student is about to get logs
+    shopping = State() #Student is about to purchase

@@ -19,8 +19,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OFFSET = 10
-LOG_OFFSET = 2
+LOG_OFFSET = 20
 ALLOWED_FILE_TYPES = ['pdf', 'photo', 'video']
+CURATORS_CHAT_ID = []
 
 redis_client = redis.Redis(
         host=os.getenv('HOST'),

@@ -1,12 +1,13 @@
 from lexicon import lexicon
 from config import LOG_OFFSET
-from qutypes import ProgressResult
+from qutypes import ProgressResult, PurchaseResult, AccrualResult
 from .other import (
     generate_id,
-    generate_task_id
+    generate_task_id,
 )
+from config import UserRole
 
-from .cloud import upload_file, get_url
+from .cloud import *
 
 from datetime import datetime
 
@@ -47,7 +48,7 @@ def query_curators_tags(db: Client)->list:
 
     return curators
 
-def get_student_id(db: Client, telegram:str):
+def get_student_id_name(db: Client, telegram:str):
     query = db.collection('students')\
               .where(filter=FieldFilter("telegram", "==", telegram))
     results = list(query.stream())
@@ -59,12 +60,16 @@ def get_student_id(db: Client, telegram:str):
         print("⚠️ Student have duplicates in DB")
 
     else:
-        doc = results[0]
-        return doc.id
+        snapshot = results[0]
+        doc = snapshot.to_dict()
+        name =  doc.get("surname") + " " + doc.get("name")
+        return snapshot.id, name
 
 def query_card(db: Client, id:str, telegram:str)->dict:
     if id:
-        doc = db.collection('students').document(id).get()
+        doc = db.collection('students')\
+                .document(id)\
+                .get()
         if not doc.exists:
             return {}
 
@@ -74,11 +79,9 @@ def query_card(db: Client, id:str, telegram:str)->dict:
         results = list(query.stream())
 
         if not results:
-            print("⚠️ No documents found for this query.")
             return {}
 
         elif len(results) > 1:
-            print("⚠️ Student have duplicates in DB")
             return {}
 
         else:
@@ -93,6 +96,7 @@ def query_card(db: Client, id:str, telegram:str)->dict:
         return {}
 
     snapshot['level'] = level_snapshot.to_dict().get('number')
+    snapshot['goal'] = level_snapshot.to_dict().get('goal')
     return snapshot
 
 def query_level_goal(db:Client, id)->bool:
@@ -132,10 +136,21 @@ def move_to_next_level(db:Client, student_id)->tuple[ProgressResult, str]:
     level_number = level_snapshot.to_dict().get('number')
     next_level_ref = db.collection('levels')\
                        .document(str(level_number+1))
-    next_level = level_ref.get()
+    next_level = next_level_ref.get()
 
-    if not next_level.exists:
+    next_next_level_ref = db.collection('levels')\
+                            .document(str(level_number+2))
+    next_next_level = next_next_level_ref.get()
+
+    if not next_level.exists and not next_next_level.exists:
+        return ProgressResult.FINISHED, None
+
+    elif not next_next_level.exists:
         response = lexicon['ru']['database']["Student Completed"]
+        ref.update({
+            "balance-per-level": 0,
+            "level": next_level_ref
+        })
         return ProgressResult.FINISHED, response
 
     ref.update({
@@ -146,30 +161,58 @@ def move_to_next_level(db:Client, student_id)->tuple[ProgressResult, str]:
     response = lexicon['ru']['database']["Student Completed The Level"]
     return ProgressResult.SUCCESS, response
 
-
 def write_qcoins(qcoins:int, db: Client, mode, student_id, name, surname):
-    if mode == 'id':
-        doc_ref = db.collection('students').document(student_id)
+    try:
+        if mode == 'id':
+            doc_ref = db.collection('students').document(student_id)
+            doc = doc_ref.get()
+            if not doc.exists:
+                return AccrualResult.FAILED, AccrualResult.FAILED.value
 
-        doc_ref.update({
-            "balance": Increment(qcoins),
-            "balance-per-level": Increment(qcoins)
-        })
-    if mode== 'fio':
-        doc_ref = db.collection('students')
-        query = doc_ref.where(filter=FieldFilter("name", "==", name))\
-                       .where(filter=FieldFilter("surname", "==", surname))
+            doc_ref.update({
+                "balance": Increment(qcoins),
+                "balance-per-level": Increment(qcoins)
+            })
 
-        results = list(query.stream())
+            if qcoins >= 0:
+                return AccrualResult.SUCCESS, AccrualResult.SUCCESS.value.format(student_id, qcoins)
 
-        if not results:
-            print("⚠️ No documents found for this query.")
-        else:
-            for result in results:
+            elif qcoins < 0:
+                return AccrualResult.SUCCESS, AccrualResult.FINE_SUCCESS.value.format(student_id, qcoins)
+
+        elif mode== 'fio':
+            full_name = name + " " + surname
+            doc_ref = db.collection('students')
+            query = doc_ref.where(filter=FieldFilter("name", "==", name))\
+                        .where(filter=FieldFilter("surname", "==", surname))
+
+            results = list(query.stream())
+
+            if not results:
+                return AccrualResult.FAILED, AccrualResult.FAILED.value
+
+            if len(results) > 1:
+                return AccrualResult.DUBLICATE, AccrualResult.DUBLICATE.value
+
+            else:
+                result = results[0]
                 result.reference.update({
                     "balance": Increment(qcoins),
                     "balance-per-level": Increment(qcoins)
                 })
+
+                if qcoins >= 0:
+                    return AccrualResult.SUCCESS, AccrualResult.SUCCESS.value.format(full_name, qcoins)
+
+                elif qcoins < 0:
+                    return AccrualResult.SUCCESS, AccrualResult.FINE_SUCCESS.value.format(full_name, qcoins)
+
+        else:
+            return AccrualResult.FAILED, AccrualResult.FAILED.value
+
+    except Exception as e:
+        response = AccrualResult.FAILED.value + "\n" + str(e)
+        return AccrualResult.FAILED, response
 
 def add_fine(db:Client, mode, student_id, name, surname):
     try:
@@ -203,45 +246,80 @@ def add_fine(db:Client, mode, student_id, name, surname):
             return False
 
 def send_task(db: Client, username, task_id, file, student_id, file_type):
-    current_time = datetime.now()
-    unique_id = str(current_time.strftime("%Y%m%d_%H%M%S"))
-    public_id = f"{student_id}{task_id}{unique_id}"
-    data = {unique_id: public_id, "is_checked": False}
-    ref = db.collection('tasklogs').document('IT')\
-        .collection(str(student_id)).document(str(task_id)).set(data, merge=True)
-    response = upload_file(file, username, task_id, public_id, file_type)
+    try:
+        current_time = datetime.now()
+        unique_id = str(current_time.strftime("%Y%m%d_%H%M%S"))
+        public_id = f"{student_id}{task_id}{unique_id}"
+        data = {unique_id: public_id, "is_checked": False}
+        ref = db.collection('tasklogs')\
+                .document('IT')\
+                .collection(str(student_id))\
+                .document(str(task_id))\
+                .set(data, merge=True)
+        response = upload_file(file, username, task_id, public_id, file_type)
+        return True
 
-def retrieve_task(db: Client, level: str, faculty:str) -> dict:
+    except:
+        return False
+
+def retrieve_task(db: Client, level: str, faculty:str, completed_tasks:list[str]) -> dict:
     try:
         ref = db.collection('tasks')\
                 .document(faculty)\
-                .collection(level)
+                .collection(level)\
+
+        if completed_tasks:
+            ref = ref.where(filter=FieldFilter("id", "not-in",completed_tasks))
 
         docs = ref.stream()
-        tasks = {doc.id: doc.to_dict() for doc in docs}
+        docs_list = list(docs)
+
+        if not docs_list:
+            return {}
+
+        tasks = {doc.id: doc.to_dict() for doc in docs_list}
         return tasks
 
     except NotFound:
-        print(f"⚠️ Коллекция '{level}' не найдена.")
-        return []
+        return {}
 
 def retrieve_report(db:Client, student_id:str):
-    ref = db.collection('tasklogs')\
-            .document('IT')\
-            .collection(student_id)\
-            .where(filter=FieldFilter("is_checked", "==", False))
+    try:
+        ref = db.collection('tasklogs')\
+                .document('IT')\
+                .collection(student_id)\
+                .where(filter=FieldFilter("is_checked", "==", False))
 
-    docs = ref.stream()
+        docs = ref.stream()
+        docs_list = list(docs)
+        if not docs_list:
+            return {}
 
-    reports = {
-        doc.id: {
-            field: get_url(public_id)
-            if isinstance(public_id, str) else public_id
-            for field, public_id in doc.to_dict().items()}
-        for doc in docs
-    }
+        reports = {
+            doc.id: {
+                field: get_url(public_id)
+                if isinstance(public_id, str) else public_id
+                for field, public_id in doc.to_dict().items()}
+            for doc in docs_list
+        }
 
-    return reports
+        return reports
+
+    except:
+        return {}
+
+def retrieve_completed_tasks_by_student(db:Client, student_id)->list:
+    try:
+        ref = db.collection('tasklogs')\
+                .document('IT')\
+                .collection(student_id)
+        docs = ref.stream()
+
+        task_ids = [doc.id for doc in docs]
+        return task_ids
+
+    except:
+        return []
 
 def mark_as_chekched(db:Client, student_id:str, task_id:str):
     try:
@@ -287,23 +365,31 @@ def write_log(db: Client, student_id:str, task_id:str=None):
         print(lexicon['ru']['database']['Not Found 1'].format(task_id, student_id))
         return False
 
-def get_log(db: Client, last_timestamp=None):
+def get_log(db: Client, student_id=None, last_timestamp=None):
     try:
-        ref = db.collection('logs')\
-                .order_by('created_at', direction="DESCENDING")\
+        if student_id is not None:
+            student_ref = db.collection("students")\
+                            .document(student_id)
+            ref = db.collection('logs')\
+                .where(filter=FieldFilter("student", "==", student_ref))\
+                .order_by('created_at', direction="DESCENDING")
+
+        else:
+            ref = db.collection('logs')\
+                    .order_by('created_at', direction="DESCENDING")
 
         if last_timestamp:
             ref = ref.start_after([last_timestamp])
 
         snapshots = list(ref.limit(LOG_OFFSET).stream())
 
-        logs = [snap.to_dict() for snap in snapshots]
-
         if not snapshots:
             return {
                 "logs": [],
                 "last_timestamp": None
             }
+
+        logs = [snap.to_dict() for snap in snapshots]
 
         last_timestamp = snapshots[-1].to_dict().get("created_at")
 
@@ -376,3 +462,173 @@ def add_task(db:Client, faculty, level, block, number, content):
       .collection(str(level))\
       .document(id)\
       .set(document_data)
+
+def record_chat_id(db:Client, username:str, role: UserRole, chat_id:str):
+    if role == UserRole.CURATOR:
+        ref = db.collection('curators')\
+                .where(filter=FieldFilter(
+                    "telegram", "==", username
+                ))
+
+    elif role == UserRole.STUDENT:
+        ref = db.collection('students')\
+                .where(filter=FieldFilter(
+                    "telegram", "==", username
+                ))
+
+    results = list(ref.stream())
+    if not results:
+        return False
+
+    else:
+        for result in results:
+            result.reference.update({
+                "chat_id": chat_id
+            })
+        return True
+
+def get_student_id_for_curator(db:Client, name, surname):
+    doc_ref = db.collection('students')
+    query = doc_ref.where(filter=FieldFilter("name", "==", name))\
+                    .where(filter=FieldFilter("surname", "==", surname))
+
+    results = list(query.stream())
+
+    if not results:
+        return None
+
+    else:
+        result = results[0]
+        student_id = result.id
+        return student_id if student_id else None
+
+def delete_task(db:Client, student_id, task_id):
+    try:
+        ref = db.collection("tasklogs")\
+                .document("IT")\
+                .collection(student_id)\
+                .document(task_id)
+        ref.delete()
+
+    except:
+        return
+
+def write_accrual_to_log(db:Client, qcoins, student_id, task_id=None):
+    try:
+        student_ref = db.collection("students")\
+                        .document(student_id)
+
+        if task_id is not None:
+            ref = db.collection('logs')\
+                    .where(filter=FieldFilter("student", "==", student_ref))\
+                    .where(filter=FieldFilter("task_id", "==", task_id))\
+                    .order_by('created_at', direction="DESCENDING")
+
+            results = list(ref.stream())
+
+            if not results:
+                current_time = datetime.now()
+                unique_id = str(current_time.strftime("%Y.%m.%d_%H:%M:%S.%f"))
+                db.collection('logs').document(unique_id).set({
+                    "accrual": qcoins,
+                    "student": student_ref,
+                    "task_id": task_id,
+                    "created_at": datetime.now()
+                })
+
+                return True
+
+            result = results[0]
+            result.reference.update({
+                "accrual": int(qcoins)
+            })
+
+            return True
+
+        else:
+            current_time = datetime.now()
+            unique_id = str(current_time.strftime("%Y.%m.%d_%H:%M:%S.%f"))
+            ref2 = db.collection('logs').document(unique_id)
+
+            ref2.set({
+                "accrual": int(qcoins),
+                "student": student_ref,
+                "created_at": datetime.now()
+            })
+
+            return True
+
+    except Exception as e:
+        return False
+
+def query_goods(db: Client):
+    response = {}
+
+    ref = db.collection('shop')
+    goods = list(ref.stream())
+
+    for good in goods:
+        response[good.id] = good.to_dict()
+
+    return response
+
+def upload_goods(db: Client, data, photo, public_id):
+    try:
+        upload_good_file(photo, public_id)
+
+        id = generate_id(2025, "S")
+        ref = db.collection("shop")\
+                .document(id)\
+                .set(data)
+        return True
+
+    except:
+        return False
+
+def purchase(db: Client, student_id:str, good_id:str):
+    try:
+        student_ref = db.collection("students")\
+                        .document(student_id)
+        student = student_ref.get().to_dict()
+        balance:int = student.get("balance")
+
+        good_ref = db.collection("shop")\
+                .document(good_id)
+        good = good_ref.get()
+        good_dict = good.to_dict()
+        price = int(good_dict.get("price"))
+
+        if good.exists and balance >= price:
+            current_time = datetime.now()
+            unique_id = str(current_time.strftime("%Y.%m.%d_%H:%M:%S.%f"))
+            ref2 = db.collection('logs').document(unique_id)
+
+            ref2.set({
+                "good_id": good_ref,
+                "student": student_ref,
+                "created_at": datetime.now(),
+                "expenditure": price
+            })
+
+            student_ref.update({"balance": balance - price})
+            return PurchaseResult.SUCCESS, PurchaseResult.SUCCESS.value.format(price)
+
+        elif not good.exists:
+            return PurchaseResult.FAILED, PurchaseResult.FAILED.value
+
+        elif balance < price:
+            return PurchaseResult.MISS, PurchaseResult.MISS.value
+
+    except:
+        return PurchaseResult.FAILED, PurchaseResult.FAILED.value
+
+def get_good_desc(student_name, good_id, time):
+    try:
+        good = good_id.get().to_dict()
+        expenditure = good.get("price")
+        name = good.get("name")
+        msg = f"{time}: {student_name} приобрел {name} за {expenditure} Qcoins"
+        return msg
+
+    except:
+        return None

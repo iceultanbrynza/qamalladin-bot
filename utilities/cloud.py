@@ -20,6 +20,14 @@ def upload_file(file:BytesIO, username, task, public_id, format):
                                           public_id=public_id)
     return response
 
+def upload_good_file(file:BytesIO, public_id):
+    folder_path = 'shop'
+    response = cloudinary.uploader.upload(file,
+                                          asset_folder=folder_path,
+                                          resource_type='auto',
+                                          public_id=public_id)
+    return response
+
 def get_url(public_id:str):
     try:
         info = cloudinary.api.resource(public_id)
