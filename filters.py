@@ -21,6 +21,11 @@ class IsFioQcoins(BaseFilter):
     async def __call__(self, message: Message)->bool:
         return re.fullmatch(r'(?:[А-ЯЁA-Z][а-яёa-z]+ [А-ЯЁA-Z][а-яёa-z]+ \d+\n?)+', message.text)
 
+class IsFio(BaseFilter):
+    async def __call__(self, message: Message)->bool:
+        pattern = r'^[А-ЯЁA-Z][а-яёa-z]+ [А-ЯЁA-Z][а-яёa-z]+$'
+        return bool(re.fullmatch(pattern, message.text.strip()))
+
 class IsAdmin(BaseFilter):
     async def __call__(self, message: Message, admins)->bool:
         return message.chat.id in admins

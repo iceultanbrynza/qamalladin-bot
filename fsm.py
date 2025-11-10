@@ -5,6 +5,7 @@ class Form(StatesGroup):
 
     student_choosing_for_accrual = State()
     accrual = State()
+    comment = State() # Curator is about to write comment
 
     student_choosing_for_fine = State()
     fine = State()
@@ -21,6 +22,8 @@ class Form(StatesGroup):
     add_tasks = State() #Curator is about to add new tasks
 
     add_goods = State()
+
+    find_student = State()
 
 
     send_report = State() # Student is about to send report

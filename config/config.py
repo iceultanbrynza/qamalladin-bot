@@ -3,6 +3,7 @@ import base64
 import json
 from dataclasses import dataclass
 from enum import Enum
+import pytz
 
 import firebase_admin
 from firebase_admin import credentials
@@ -22,10 +23,11 @@ OFFSET = 10
 LOG_OFFSET = 20
 ALLOWED_FILE_TYPES = ['pdf', 'photo', 'video']
 CURATORS_CHAT_ID = []
+LOCAL_TZ = pytz.timezone("Asia/Almaty")
 
 redis_client = redis.Redis(
         host=os.getenv('HOST'),
-        port=os.getenv('PORT'),
+        port=os.getenv('REDIS_PORT'),
         decode_responses=True,
         username="default",
         password=os.getenv('PASSWORD')
@@ -48,6 +50,7 @@ class BotConfig:
     database:str
     admins: list
     storage:RedisStorage
+    webhook_host:str
 
 def load_config()->BotConfig:
     # assemble configuration info
@@ -67,7 +70,8 @@ def load_config()->BotConfig:
         admins=[int(admin.strip()) for admin in os.getenv('ADMINS', '').split(',') if admin.strip().isdigit()],
         storage=RedisStorage(redis=redis_client,
                              state_ttl=3600,
-                             data_ttl=3600)
+                             data_ttl=3600),
+        webhook_host=os.getenv('WEBHOOK_HOST')
     )
 
     return config

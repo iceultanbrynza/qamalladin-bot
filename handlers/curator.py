@@ -6,7 +6,9 @@ from utilities.keyboard import (
     exitKeyboard,
     addGoodKeyboard,
     addGoodButton,
-    createStudentPanel
+    createStudentPanel,
+    noButton,
+    yesnoButton
 )
 from utilities.database_async import *
 from utilities.other import (
@@ -15,17 +17,19 @@ from utilities.other import (
 )
 from utilities.cloud import get_url
 from lexicon import lexicon
-from filters import IsInteger, IsFioQcoins
+from filters import IsInteger, IsFioQcoins, IsFio
 from fsm import Form
 from utilities.authorizing import is_registered, UserRole
 from qutypes import AccrualResult
+from utilities.caching import delete_from_redis
+from config import LOCAL_TZ
 
 import re
 from datetime import datetime
 import asyncio
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, User, Chat
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InputMediaPhoto
@@ -53,6 +57,117 @@ async def get_students(message:Message, state: FSMContext, db):
         students = await get_dict_with_offset(sorted_data, start)
         keyboard = createCardKeyboard(students)
         await message.answer('Список карточек студентов:', reply_markup=keyboard)
+
+@router.callback_query(F.data.startswith('find:card'), StateFilter(Form.student_card,
+                                                                   Form.student_choosing_for_accrual,
+                                                                   Form.accrual,
+                                                                   Form.student_choosing_for_fine,
+                                                                   Form.fine,
+                                                                   Form.get_report,
+                                                                   Form.assess_report))
+async def find_student(callback: CallbackQuery, state: FSMContext, db):
+    # идея такая, мы проверяем в каком состоянии куратор и на основании состояния
+    # вызываем нужный хэндлер который делает нужную функцию.
+    await callback.message.answer('Введите фамилию и имя студента')
+    await callback.answer()
+
+@router.message(F.text, IsFio(), StateFilter(Form.student_card,
+                                    Form.student_choosing_for_accrual,
+                                    Form.student_choosing_for_fine,
+                                    Form.get_report,
+                                    Form.assess_report))
+async def handle_find_student(message: Message, state: FSMContext, db):
+    text = message.text
+    try:
+        parts = text.strip().split(" ")
+        if len(parts) != 2:
+            await message.answer('Ошибка в формате. Попробуйте еще раз.')
+            return
+
+        surname, name = parts
+
+    except:
+        await message.answer('Ошибка в формате. Попробуйте еще раз.')
+        return
+
+    student_id = await get_student_id_for_curator_async(db, name, surname)
+
+    if student_id == ProgressResult.DUBLICATE:
+        await message.answer('Ошибка, существует как минимум два студента с таким именем. Попробуйте найти нужного студента в списке студентов сверху.')
+        return
+
+    elif student_id == ProgressResult.FAILED:
+        await message.answer('Ошибка поиска. Попробуйте найти нужного студента в списке сверху.')
+        return
+
+    else:
+        user_state = await state.get_state()
+        bot = message.bot
+        message_id = message.message_id
+        user = message.from_user
+        chat = message.chat
+        callback = await generate_callback(bot, message_id, chat, text, user, f"card:{student_id}")
+        if user_state == Form.student_card.state:
+            if callback:
+                await get_card(callback, state, db)
+                return
+
+            else:
+                await message.answer('Ошибка поиска. Попробуйте найти нужного студента в списке сверху.')
+                return
+
+        elif user_state == Form.student_choosing_for_accrual.state:
+            if callback:
+                await accrual(callback, state, db)
+                return
+
+            else:
+                await message.answer('Ошибка поиска. Попробуйте найти нужного студента в списке сверху.')
+                return
+
+        elif user_state == Form.student_choosing_for_fine.state:
+            if callback:
+                await fine(callback, state, db)
+                return
+
+            else:
+                await message.answer('Ошибка поиска. Попробуйте найти нужного студента в списке сверху.')
+                return
+
+        elif user_state == Form.assess_report.state or user_state == Form.get_report.state:
+            if callback:
+                await fetch_report(callback, state, db)
+                return
+
+            else:
+                await message.answer('Ошибка поиска. Попробуйте найти нужного студента в списке сверху.')
+                return
+
+
+async def generate_callback(bot, message_id, chat, text, user, data):
+    try:
+        message = Message(
+            message_id=message_id,
+            date=datetime.now(),
+            chat=chat,
+            text=text,
+            from_user=user
+        )
+        message._bot = bot
+
+        callback = CallbackQuery(
+            id="fake-callback-id",
+            from_user=user,
+            chat_instance="fake-instance",
+            message=message,
+            data=data
+        )
+        callback._bot = bot
+
+        return callback
+
+    except:
+        return None
 
 @router.callback_query(F.data.startswith('next:card'), StateFilter(Form.student_card,
                                                                    Form.student_choosing_for_accrual,
@@ -138,7 +253,6 @@ async def get_card(callback:CallbackQuery, state: FSMContext, db):
     card = lexicon['ru']['general']['card'].format(*info)
 
     await callback.message.answer(text=card)
-    await callback.answer()
 
 
 # Начисление Qcoins
@@ -175,7 +289,6 @@ async def accrual(callback:CallbackQuery, state:FSMContext, db):
     start = data.get('start')
     await state.set_state(Form.accrual)
     await state.update_data(start=start)
-    await callback.answer()
 
 @router.message(F.text, IsFioQcoins(), StateFilter(Form.student_choosing_for_accrual))
 async def manual_accrual(message: Message, state:FSMContext, db):
@@ -194,34 +307,99 @@ async def manual_accrual(message: Message, state:FSMContext, db):
 
         response_state, msg = await write_qcoins_async(int(qcoins), db, mode='fio', name=name, surname=surname)
         await message.answer(text=msg)
-        if response_state in (AccrualResult.FAILED, AccrualResult.DUBLICATE):
+        if response_state in (AccrualResult.FAILED, AccrualResult.DUBLICATE, AccrualResult.VALUE_ERROR):
             continue
 
         student_id = await get_student_id_for_curator_async(db, name, surname)
         chat_id = await get_student_chat_id(db, student_id)
         response = await write_accrual_to_log_async(db, int(qcoins), student_id)
         progress, msg = await is_balance_per_level_enough(db, student_id)
-        if msg is not None and chat_id is not None:
-            await message.bot.send_message(chat_id=chat_id, text=msg)
+        if chat_id is not None:
+            feedback = lexicon["ru"]["student"]["accrual"].format(int(qcoins.group()))
+            await message.bot.send_message(chat_id=chat_id, text=feedback)
+            if msg is not None:
+                await message.bot.send_message(chat_id=chat_id, text=msg)
 
 @router.message(F.text, IsInteger(), StateFilter(Form.accrual))
 async def writing_accrual(message: Message, state:FSMContext, db):
-    await state.set_state(Form.student_choosing_for_accrual)
     data = await state.get_data()
-    student_id = data['student_id']
+    student_id = data.get('student_id')
     qcoins = re.search(r"\d+", message.text)
 
     if not qcoins:
         await message.answer(f"В сообщении нет числа")
         return
 
+    if not student_id:
+        await message.answer(f"Истек срок ответа.")
+        return
+
     response_state, msg = await write_qcoins_async(int(qcoins.group()), db, student_id=student_id)
     await message.answer(text=msg)
-    response = await write_accrual_to_log_async(db, int(qcoins.group()), student_id)
+    log_id = await write_accrual_to_log_async(db, int(qcoins.group()), student_id)
     progress, msg = await is_balance_per_level_enough(db, student_id)
     chat_id = await get_student_chat_id(db, student_id)
-    if msg is not None and chat_id is not None:
-        await message.bot.send_message(chat_id=chat_id, text=msg)
+
+    if chat_id is not None:
+        feedback = lexicon["ru"]["student"]["accrual"].format(int(qcoins.group()))
+        await message.bot.send_message(chat_id=chat_id, text=feedback)
+        if msg is not None:
+            await message.bot.send_message(chat_id=chat_id, text=msg)
+
+    if log_id and response_state == AccrualResult.SUCCESS:
+        text = lexicon['ru']['curator']['accrual']['comment']
+        await message.answer(text=text, reply_markup=noButton())
+        await state.set_state(Form.comment)
+        await state.update_data(log_id=log_id, student_id=student_id)
+
+    else:
+        await state.set_state(Form.student_choosing_for_accrual)
+
+@router.message(F.text, StateFilter(Form.comment))
+async def comment(message:Message, state:FSMContext, db):
+    comment = message.text.strip()
+    if len(comment) > 50:
+        await message.answer(text="Слишком большой комментарий... Попробуйте еще раз")
+        return
+
+    text = f"{comment}"
+    await message.answer(text=text, reply_markup=yesnoButton())
+
+@router.callback_query(F.data.startswith('comment:yes'), StateFilter(Form.comment))
+async def confirm_comment(callback:CallbackQuery, state:FSMContext, db):
+    comment = callback.message.text.strip()
+    await state.set_state(Form.student_choosing_for_accrual)
+    data = await state.get_data()
+    log_id = data.get("log_id", None)
+    student_id = data.get('student_id', None)
+    if log_id is None or student_id is None:
+        await callback.message.answer(f"Истек срок ответа.")
+        return
+
+    chat_id = await get_student_chat_id(db, student_id)
+    if chat_id is not None:
+        text = lexicon['ru']['curator']['log']['comment'].format(comment)
+        await callback.bot.send_message(chat_id=chat_id, text=text)
+
+    response = await write_comment_async(db, log_id, comment)
+    if response:
+        await callback.answer("Комментарий сохранен в логах.")
+        await callback.message.delete()
+
+    else:
+        await callback.answer("Не получилось сохранить комментарий(")
+
+
+@router.callback_query(F.data.startswith('comment:no'), StateFilter(Form.comment))
+async def deny_comment(callback:CallbackQuery, state:FSMContext, db):
+    await callback.message.delete()
+    await callback.answer("Напишите новый комментарий")
+
+@router.callback_query(F.data.startswith('comment:skip'), StateFilter(Form.comment))
+async def skip_commenting(callback:CallbackQuery, state:FSMContext, db):
+    await state.set_state(Form.student_choosing_for_accrual)
+    await callback.message.delete()
+    await callback.answer()
 
 # Выдача штрафов
 @router.message(F.text=='🚫 Выдать штраф')
@@ -249,7 +427,6 @@ async def fine(callback:CallbackQuery, state:FSMContext, db):
     start = data.get('start')
     await state.set_state(Form.fine)
     await state.update_data(start=start, student_id=student_id)
-    await callback.answer()
 
 @router.message(F.text, IsFioQcoins(), StateFilter(Form.student_choosing_for_fine))
 async def manual_fine(message: Message, state:FSMContext, db):
@@ -263,12 +440,18 @@ async def manual_fine(message: Message, state:FSMContext, db):
         name, surname, qcoins = message.text.split('\n')[i].split(' ')
         response_state, msg = await write_qcoins_async(-int(qcoins), db, mode='fio', name=name, surname=surname)
         await message.answer(text=msg)
-        if response_state in (AccrualResult.FAILED, AccrualResult.DUBLICATE):
+        if response_state in (AccrualResult.FAILED, AccrualResult.DUBLICATE, AccrualResult.VALUE_ERROR):
             continue
+        
         await add_fine_async(db, mode='fio', name=name, surname=surname)
         student_id = await get_student_id_for_curator_async(db, name, surname)
         if student_id:
-            response = await write_accrual_to_log_async(db, -int(qcoins), student_id)
+            log_id = await write_accrual_to_log_async(db, -int(qcoins), student_id)
+            chat_id = await get_student_chat_id(db, student_id)
+
+            if chat_id is not None:
+                feedback = lexicon["ru"]["student"]["fine"].format(int(qcoins.group()))
+                await message.bot.send_message(chat_id=chat_id, text=feedback)
 
 @router.message(F.text, IsInteger(), StateFilter(Form.fine))
 async def writing_fine(message: Message, state:FSMContext, db):
@@ -278,12 +461,76 @@ async def writing_fine(message: Message, state:FSMContext, db):
 
     if not qcoins:
         await message.answer(f"В сообщении нет числа")
+        return
+
+    if not student_id:
+        await message.answer(f"Истек срок ответа.")
+        return
+
     response_state, msg = await write_qcoins_async(-int(qcoins.group()), db, student_id=student_id)
     await message.answer(text=msg)
     await add_fine_async(db, student_id=student_id)
-    await write_accrual_to_log_async(db, -int(qcoins.group()), student_id)
-    await state.set_state(Form.student_choosing_for_fine)
+    log_id = await write_accrual_to_log_async(db, -int(qcoins.group()), student_id)
+    chat_id = await get_student_chat_id(db, student_id)
 
+    if chat_id is not None:
+        feedback = lexicon["ru"]["student"]["fine"].format(int(qcoins.group()))
+        await message.bot.send_message(chat_id=chat_id, text=feedback)
+
+    if log_id and response_state == AccrualResult.SUCCESS:
+        text = lexicon['ru']['curator']['accrual']['comment']
+        await message.answer(text=text, reply_markup=noButton())
+        await state.set_state(Form.comment)
+        await state.update_data(log_id=log_id, student_id=student_id)
+
+    else:
+        await state.set_state(Form.student_choosing_for_accrual)
+
+@router.message(F.text, StateFilter(Form.comment))
+async def comment(message:Message, state:FSMContext, db):
+    comment = message.text.strip()
+    if len(comment) > 100:
+        await message.answer(text="Слишком большой комментарий... Попробуйте еще раз")
+        return
+
+    text = f"{comment}"
+    await message.answer(text=text, reply_markup=yesnoButton())
+
+@router.callback_query(F.data.startswith('comment:yes'), StateFilter(Form.comment))
+async def confirm_comment(callback:CallbackQuery, state:FSMContext, db):
+    comment = callback.message.text.strip()
+    await state.set_state(Form.student_choosing_for_accrual)
+    data = await state.get_data()
+    log_id = data.get("log_id", None)
+    student_id = data.get('student_id', None)
+    if log_id is None or student_id is None:
+        await callback.message.answer(f"Истек срок ответа.")
+        return
+
+    chat_id = await get_student_chat_id(db, student_id)
+    if chat_id is not None:
+        text = lexicon['ru']['curator']['log']['comment'].format(comment)
+        await callback.bot.send_message(chat_id=chat_id, text=text)
+
+    response = await write_comment_async(db, log_id, comment)
+    if response:
+        await callback.answer("Комментарий сохранен в логах.")
+        await callback.message.delete()
+
+    else:
+        await callback.answer("Не получилось сохранить комментарий(")
+
+
+@router.callback_query(F.data.startswith('comment:no'), StateFilter(Form.comment))
+async def deny_comment(callback:CallbackQuery, state:FSMContext, db):
+    await callback.message.delete()
+    await callback.answer("Напишите новый комментарий")
+
+@router.callback_query(F.data.startswith('comment:skip'), StateFilter(Form.comment))
+async def skip_commenting(callback:CallbackQuery, state:FSMContext, db):
+    await state.set_state(Form.student_choosing_for_accrual)
+    await callback.message.delete()
+    await callback.answer()
 
 # Смотреть отчеты студентов
 @router.message(F.text == "📈 Отчеты")
@@ -309,7 +556,7 @@ async def fetch_report(callback: CallbackQuery, state:FSMContext, db):
     chat_id = callback.message.chat.id
     reports = await retrieve_report_async(db, student_id)
     if not reports:
-        await callback.answer('У пользователя нет непроверенных заданий')
+        await callback.message.answer('У пользователя нет непроверенных заданий')
         return
 
     for task_id, content in reports.items():
@@ -324,7 +571,8 @@ async def fetch_report(callback: CallbackQuery, state:FSMContext, db):
         await callback.message.answer(**answer)
 
         for key, value in content.items():
-            data = datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
+            tz = pytz.timezone("Asia/Almaty")
+            data = datetime.now(tz).strftime("%d/%m/%Y_%H:%M:%S")
             if value[1] in ['jpg', 'jpeg', 'png']:
                 file = URLInputFile(url=value[0], filename=f"{data}.png")
                 await callback.bot.send_document(chat_id, file)
@@ -428,6 +676,9 @@ async def get_next_log(callback:CallbackQuery, state:FSMContext, db):
     if text is not None:
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
+    else:
+        await callback.answer("Логи закончились")
+
 async def parse_log(response, state):
     last_timestamp = response.get('last_timestamp')
     if last_timestamp:
@@ -461,19 +712,36 @@ async def get_log_text(logs):
         task_id = log.get('task_id', None)
         accrual = log.get('accrual', None)
         good = log.get('good_id', None)
+        comment = log.get("comment", None)
         if task_id is not None:
             text += lexicon['ru']['curator']['log']['report'].format(time, student_name, task_id)
 
             if accrual is not None:
+                accrualed_at = log.get('accrualed_at')
+                dt = datetime.fromisoformat(str(accrualed_at))
+                if dt.tzinfo is None:
+                    dt = LOCAL_TZ.localize(dt)
+                else:
+                    dt = dt.astimezone(LOCAL_TZ)
+                accrualed_time = dt.strftime("%d %B %Y, %H:%M:%S")
                 text += ". "
-                text += lexicon['ru']['curator']['accrual']['logging'].format(time, student_name, accrual)
+                text += lexicon['ru']['curator']['accrual']['logging'].format(accrualed_time, student_name, accrual)
 
         elif accrual is not None:
+            accrualed_at = log.get('accrualed_at')
+            dt = datetime.fromisoformat(str(accrualed_at))
+
+            if dt.tzinfo is None:
+                    dt = LOCAL_TZ.localize(dt)
+            else:
+                dt = dt.astimezone(LOCAL_TZ)
+
+            accrualed_time = dt.strftime("%d %B %Y, %H:%M:%S")
             if accrual > 0:
-                text += lexicon['ru']['curator']['accrual']['logging'].format(time, student_name, accrual)
+                text += lexicon['ru']['curator']['accrual']['logging'].format(accrualed_time, student_name, accrual)
 
             elif accrual < 0:
-                text += lexicon['ru']['curator']['fine']['logging'].format(time, student_name, accrual*-1)
+                text += lexicon['ru']['curator']['fine']['logging'].format(accrualed_time, student_name, accrual*-1)
 
         elif good is not None:
             desc = await get_good_desc_async(student_name, good, time)
@@ -485,6 +753,10 @@ async def get_log_text(logs):
 
         else:
             continue
+
+        if comment is not None:
+            text += ". "
+            text+=lexicon['ru']['curator']['log']['comment'].format(comment)
 
         text+='\n'
     if text:
@@ -564,6 +836,8 @@ async def adding_students(message, students, db):
     success = await add_students_async(db, students)
 
     if success:
+        await delete_from_redis_by_group("students_tags")
+        await delete_from_redis_by_group("students")
         await rewrite_cached_students(db)
         text = lexicon['ru']['curator']['add student']
 
@@ -594,6 +868,74 @@ async def handle_text(message: Message, db):
         text = lexicon['ru']['curator']['didnt add levels']
 
     await message.answer(text)
+
+@router.message(F.text.startswith('/addCurator'))
+async def addCurator(message:Message, state:FSMContext, db):
+    username = message.from_user.username
+
+    is_curator = await is_registered(username, db, UserRole.CURATOR)
+
+    if is_curator:
+        args = message.text.split()
+        if len(args) != 4:
+            await message.answer("Использование: /addCurator Фамилия Имя телеграм-тэг")
+            return
+
+        surname = str(args[1])
+        name = str(args[2])
+        telegram = str(args[3])
+
+        response = await add_curator_async(db, surname, name, telegram)
+
+        if response:
+            await message.answer("Куратор добавлен")
+
+        else:
+            await message.answer("Ошибка. Не получилось создать куратора")
+
+@router.message(F.text.startswith('/deleteCurator'))
+async def deleteCurator(message:Message, state:FSMContext, db):
+    username = message.from_user.username
+
+    is_curator = await is_registered(username, db, UserRole.CURATOR)
+
+    if is_curator:
+        args = message.text.split()
+        if len(args) != 2:
+            await message.answer("Использование: /deleteCurator телеграм-тэг")
+            return
+
+        telegram = str(args[1])
+
+        response = await delete_curator_async(db, telegram)
+
+        if response:
+            await message.answer("Куратор удален")
+
+        else:
+            await message.answer("Ошибка. Не получилось удалить куратора")
+
+@router.message(F.text.startswith('/deleteStudent'))
+async def deleteStudent(message:Message, state:FSMContext, db):
+    username = message.from_user.username
+
+    is_curator = await is_registered(username, db, UserRole.CURATOR)
+
+    if is_curator:
+        args = message.text.split()
+        if len(args) != 2:
+            await message.answer("Использование: /deleteStudent телеграм-тэг")
+            return
+
+        telegram = str(args[1])
+
+        response = await delete_student_async(db, telegram)
+
+        if response:
+            await message.answer("Студент удален")
+
+        else:
+            await message.answer("Ошибка. Не получилось удалить студента")
 
 
 # Добавление новых задач
@@ -679,7 +1021,7 @@ async def shop_manager(message: Message, state: FSMContext, db):
 
         if good:
             good_id, name, description, price, photo = await parse_good(good)
-            keyboard = addGoodKeyboard()
+            keyboard = addGoodKeyboard(good_id)
             caption = lexicon['ru']['curator']['shop'].format(name, price, description)
             if photo:
                 photo_url = get_url(photo)
@@ -698,22 +1040,24 @@ async def get_next_good(callback: CallbackQuery, state: FSMContext, db):
 
     if pos == '' or message_id == '':
         await callback.message.answer('Вы не можете использовать эту функцию')
-        return
+        return False
 
     good = await qyery_good(db, pos+1)
     if good:
         await state.update_data(pos=pos+1)
         good_id, name, description, price, photo = await parse_good(good)
-        keyboard = addGoodKeyboard()
+        keyboard = addGoodKeyboard(good_id)
         caption = lexicon['ru']['curator']['shop'].format(name, price, description)
         if photo:
             photo_url = get_url(photo)
             media = InputMediaPhoto(media=photo_url[0], caption=caption)
             await callback.message.edit_media(media=media, reply_markup=keyboard)
-            return
+
+        return True
 
     else:
         await callback.answer("Больше товаров нет")
+        return False
 
 @router.callback_query(F.data.startswith('back:shop'), StateFilter(Form.add_goods))
 async def get_prev_good(callback: CallbackQuery, state: FSMContext, db):
@@ -723,22 +1067,23 @@ async def get_prev_good(callback: CallbackQuery, state: FSMContext, db):
 
     if pos == '' or message_id == '':
         await callback.message.answer('Вы не можете использовать эту функцию')
-        return
+        return False
 
     good = await qyery_good(db, pos-1)
     if good:
         await state.update_data(pos=pos-1)
         good_id, name, description, price, photo = await parse_good(good)
-        keyboard = addGoodKeyboard()
+        keyboard = addGoodKeyboard(good_id)
         caption = lexicon['ru']['curator']['shop'].format(name, price, description)
         if photo:
             photo_url = get_url(photo)
             media = InputMediaPhoto(media=photo_url[0], caption=caption)
             await callback.message.edit_media(media=media, reply_markup=keyboard)
-            return
+        return True
 
     else:
         await callback.answer("Больше товаров нет")
+        return False
 
 
 async def parse_good(good:tuple):
@@ -774,8 +1119,8 @@ async def uploading_goods(db, message, file_path, caption):
         if len(parts) != 3:
             await message.answer(f"Ошибка: нарушен формат")
             return False
-
-        current_time = datetime.now()
+        tz = pytz.timezone("Asia/Almaty")
+        current_time = datetime.now(tz)
         public_id = str(current_time.strftime("%Y%m%d_%H%M%S"))
 
         data = {
@@ -788,7 +1133,7 @@ async def uploading_goods(db, message, file_path, caption):
         file_bytes.seek(0)
 
         response = await upload_goods_async(db, data, file_bytes, public_id)
-        await rewrite_cached_shop(db)
+        await rewrite_cached_goods(db)
         return response
 
     except ValueError as e:
@@ -797,6 +1142,31 @@ async def uploading_goods(db, message, file_path, caption):
 
     except:
         return False
+
+@router.callback_query(F.data.startswith("delete:"), StateFilter(Form.add_goods))
+async def delete_good(callback: CallbackQuery, state: FSMContext, db):
+    good_id = callback.data.split(":")[1]
+    message_id=callback.message.message_id
+    await state.update_data(message_id=message_id)
+    response = await delete_good_async(db, good_id)
+
+    if response:
+        await delete_from_redis("shop", good_id)
+        got = await get_next_good(callback, state, db)
+        if not got:
+            got_prev = await get_prev_good(callback, state, db)
+
+            if not got_prev:
+                await callback.message.delete()
+
+        text = lexicon['ru']['curator']["deletion"]
+        await callback.message.answer(text=text)
+        await callback.answer()
+
+    else:
+        text = lexicon['ru']['curator']["error deletion"]
+        await callback.message.answer(text=text)
+        await callback.answer()
 
 
 # Выход

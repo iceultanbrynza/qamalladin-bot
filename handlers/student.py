@@ -9,7 +9,8 @@ from utilities.database_async import (
     qyery_good,
     get_url,
     purchase_async,
-    get_good_desc_async
+    get_good_desc_async,
+    query_goods_async
 )
 
 from utilities.authorizing import is_registered, UserRole
@@ -18,11 +19,12 @@ from utilities.keyboard import (
     levelsKeyboard,
     nextKeyboard,
     buyGoodKeyboard,
-    exitKeyboard
+    exitKeyboard,
+    createShopCardKeyboard
 )
 from utilities.other import get_file_type
 from lexicon import lexicon
-from config import ALLOWED_FILE_TYPES, CURATORS_CHAT_ID
+from config import ALLOWED_FILE_TYPES, CURATORS_CHAT_ID, LOCAL_TZ
 from fsm import Form
 from qutypes import PurchaseResult
 
@@ -232,19 +234,34 @@ async def get_log_text(logs):
         task_id = log.get('task_id', None)
         accrual = log.get('accrual', None)
         good = log.get('good_id', None)
+        comment = log.get("comment", None)
         if task_id is not None:
             text += lexicon['ru']['curator']['log']['report'].format(time, student_name, task_id)
 
             if accrual is not None:
+                accrualed_at = log.get('accrualed_at')
+                dt = datetime.fromisoformat(str(accrualed_at))
+                if dt.tzinfo is None:
+                    dt = LOCAL_TZ.localize(dt)
+                else:
+                    dt = dt.astimezone(LOCAL_TZ)
+                accrualed_time = dt.strftime("%d %B %Y, %H:%M:%S")
                 text += ". "
-                text += lexicon['ru']['curator']['accrual']['logging'].format(time, student_name, accrual)
+                text += lexicon['ru']['curator']['accrual']['logging'].format(accrualed_time, student_name, accrual)
 
         elif accrual is not None:
+            accrualed_at = log.get('accrualed_at')
+            dt = datetime.fromisoformat(str(accrualed_at))
+            if dt.tzinfo is None:
+                    dt = LOCAL_TZ.localize(dt)
+            else:
+                dt = dt.astimezone(LOCAL_TZ)
+            accrualed_time = dt.strftime("%d %B %Y, %H:%M:%S")
             if accrual > 0:
-                text += lexicon['ru']['curator']['accrual']['logging'].format(time, student_name, accrual)
+                text += lexicon['ru']['curator']['accrual']['logging'].format(accrualed_time, student_name, accrual)
 
             elif accrual < 0:
-                text += lexicon['ru']['curator']['fine']['logging'].format(time, student_name, accrual*-1)
+                text += lexicon['ru']['curator']['fine']['logging'].format(accrualed_time, student_name, accrual*-1)
 
         elif good is not None:
             desc = await get_good_desc_async(student_name, good, time)
@@ -257,6 +274,10 @@ async def get_log_text(logs):
         else:
             continue
 
+        if comment is not None:
+            text += ". "
+            text+=lexicon['ru']['curator']['log']['comment'].format(comment)
+
         text+='\n'
     if text:
         text="<pre>"+text+"</pre>"
@@ -264,34 +285,62 @@ async def get_log_text(logs):
 
 @router.message(F.text == "🏪 Магазин")
 async def shop(message: Message, state: FSMContext, db):
-    pos = 0
     message_id=message.message_id
     username = message.from_user.username
     is_student = await is_registered(username, db, UserRole.STUDENT)
     if is_student:
         await state.set_state(Form.shopping)
-        await state.update_data(message_id=message_id, pos=pos)
-        good:tuple = await qyery_good(db,pos)
-
-        if good:
-            good_id, name, description, price, photo = await parse_good(good)
-            keyboard = buyGoodKeyboard(good_id)
-            caption = lexicon['ru']['student']['shop'].format(name, price, description)
-            if photo:
-                photo_url = get_url(photo)
-                await message.answer_photo(photo=photo_url[0], caption=caption, reply_markup=keyboard)
-                return
+        await state.update_data(message_id=message_id)
+        goods = await query_goods_async(db)
+        if goods:
+            sorted_data = list(sorted(goods.items(), key=lambda item: item[1]['name']))
+            keyboard = createShopCardKeyboard(sorted_data)
+            await message.answer("Каталог товаров магазина QU:", reply_markup=keyboard)
 
         else:
             keyboard = exitKeyboard()
             await message.answer("Магазин пустует...", reply_markup=keyboard)
 
-@router.callback_query(F.data.startswith('next:shop'), StateFilter(Form.shopping))
+@router.callback_query(F.data.startswith('good'), StateFilter(Form.shopping))
+async def get_good_card(callback: CallbackQuery, state: FSMContext, db):
+    message_id = callback.message.message_id
+    good_id = str(callback.data.split(":")[1])
+    goods = await query_goods_async(db)
+    if not goods:
+        await callback.answer("Товары не найдены.")
+        return
+
+    sorted_data = dict(sorted(goods.items(), key=lambda item: item[1].get('name', '')))
+    for i, (id_, good_data) in enumerate(sorted_data.items()):
+        if id_ == good_id:
+            index = i
+            good = (id_, good_data)
+            break
+
+    else:
+        await callback.answer("Товар не найден.")
+        return
+
+    await state.update_data(message_id=message_id, pos=index)
+    good_id, name, description, price, photo = await parse_good(good)
+    keyboard = buyGoodKeyboard(good_id)
+    caption = lexicon['ru']['student']['shop'].format(name, price, description)
+    if photo:
+        photo_url = get_url(photo)
+        await callback.message.answer_photo(photo=photo_url[0], caption=caption, reply_markup=keyboard)
+        return
+
+@router.callback_query(F.data.startswith('shop:exit'), StateFilter(Form.shopping))
+async def exit_good(callback: CallbackQuery, state: FSMContext, db):
+    await callback.message.delete()
+
+@router.callback_query(F.data.startswith('shop:next'), StateFilter(Form.shopping))
 async def get_next_good(callback: CallbackQuery, state: FSMContext, db):
     data = await state.get_data()
-    pos = int(data.get('pos', ''))
+    pos = data.get('pos', '')
     message_id = data.get('message_id', '')
 
+    pos = int(pos)
     if pos == '' or message_id == '':
         await callback.message.answer('Вы не можете использовать эту функцию')
         return
@@ -311,16 +360,16 @@ async def get_next_good(callback: CallbackQuery, state: FSMContext, db):
     else:
         await callback.answer("Больше товаров нет")
 
-@router.callback_query(F.data.startswith('back:shop'), StateFilter(Form.shopping))
+@router.callback_query(F.data.startswith('shop:back'), StateFilter(Form.shopping))
 async def get_prev_good(callback: CallbackQuery, state: FSMContext, db):
     data = await state.get_data()
-    pos = int(data.get('pos', ''))
+    pos = (data.get('pos', ''))
     message_id = data.get('message_id', '')
 
     if pos == '' or message_id == '':
         await callback.message.answer('Вы не можете использовать эту функцию')
         return
-
+    pos = int(pos)
     good = await qyery_good(db, pos-1)
     if good:
         await state.update_data(pos=pos-1)

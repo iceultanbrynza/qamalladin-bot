@@ -10,6 +10,7 @@ from config import UserRole
 from .cloud import *
 
 from datetime import datetime
+import pytz
 
 from google.cloud.firestore import Client, Increment, FieldFilter
 from google.api_core.exceptions import NotFound, GoogleAPICallError
@@ -210,6 +211,9 @@ def write_qcoins(qcoins:int, db: Client, mode, student_id, name, surname):
         else:
             return AccrualResult.FAILED, AccrualResult.FAILED.value
 
+    except ValueError:
+        return AccrualResult.VALUE_ERROR, AccrualResult.VALUE_ERROR.value
+
     except Exception as e:
         response = AccrualResult.FAILED.value + "\n" + str(e)
         return AccrualResult.FAILED, response
@@ -247,7 +251,8 @@ def add_fine(db:Client, mode, student_id, name, surname):
 
 def send_task(db: Client, username, task_id, file, student_id, file_type):
     try:
-        current_time = datetime.now()
+        tz = pytz.timezone("Asia/Almaty")
+        current_time = datetime.now(tz)
         unique_id = str(current_time.strftime("%Y%m%d_%H%M%S"))
         public_id = f"{student_id}{task_id}{unique_id}"
         data = {unique_id: public_id, "is_checked": False}
@@ -348,15 +353,15 @@ def write_log(db: Client, student_id:str, task_id:str=None):
         if not doc.exists:
             print(lexicon['ru']['database']['Student Not Found'].format(student_id))
             return False
-
-        current_time = datetime.now()
+        tz = pytz.timezone("Asia/Almaty")
+        current_time = datetime.now(tz)
         unique_id = str(current_time.strftime("%Y.%m.%d_%H:%M:%S.%f"))
         ref2 = db.collection('logs').document(unique_id)
 
         ref2.set({
             "task_id": task_id,
             "student": ref1,
-            "created_at": datetime.now()
+            "created_at": current_time
         })
 
         return True
@@ -430,6 +435,58 @@ def add_student(db: Client, year:int, student:str):
       .document(id)\
       .set(document_data)
 
+def add_curator(db:Client, surname, name, telegram):
+    try:
+        year = datetime.now().year
+        curator_id = generate_id(year, "QU")
+        ref = db.collection("curators")\
+                .document(curator_id)\
+                .set({
+                    "surname": surname,
+                    "name": name,
+                    "telegram": telegram
+                })
+        return True
+
+    except:
+        return False
+
+def delete_curator(db:Client, telegram):
+    try:
+        ref = db.collection("curators")\
+                .where(filter=FieldFilter("telegram", "==", telegram))
+
+        results = list(ref.stream())
+
+        if not results:
+            return False
+
+        for result in results:
+            result.reference.delete()
+
+        return True
+
+    except:
+        return False
+
+def delete_student(db:Client, telegram):
+    try:
+        ref = db.collection("students")\
+                .where(filter=FieldFilter("telegram", "==", telegram))
+
+        results = list(ref.stream())
+
+        if not results:
+            return False
+
+        for result in results:
+            result.reference.delete()
+
+        return True
+
+    except:
+        return False
+
 def add_level(db:Client, level):
     number = int(level[0])
     title = level[1]
@@ -488,19 +545,26 @@ def record_chat_id(db:Client, username:str, role: UserRole, chat_id:str):
         return True
 
 def get_student_id_for_curator(db:Client, name, surname):
-    doc_ref = db.collection('students')
-    query = doc_ref.where(filter=FieldFilter("name", "==", name))\
+    try:
+        doc_ref = db.collection('students')
+        query = doc_ref.where(filter=FieldFilter("name", "==", name))\
                     .where(filter=FieldFilter("surname", "==", surname))
 
-    results = list(query.stream())
+        results = list(query.stream())
 
-    if not results:
-        return None
+        if not results:
+            return ProgressResult.FAILED
 
-    else:
-        result = results[0]
-        student_id = result.id
-        return student_id if student_id else None
+        elif len(results) > 1:
+            return ProgressResult.DUBLICATE
+
+        else:
+            result = results[0]
+            student_id = result.id
+            return student_id if student_id else ProgressResult.FAILED
+
+    except:
+        return ProgressResult.FAILED
 
 def delete_task(db:Client, student_id, task_id):
     try:
@@ -515,6 +579,7 @@ def delete_task(db:Client, student_id, task_id):
 
 def write_accrual_to_log(db:Client, qcoins, student_id, task_id=None):
     try:
+        tz = pytz.timezone("Asia/Almaty")
         student_ref = db.collection("students")\
                         .document(student_id)
 
@@ -527,36 +592,39 @@ def write_accrual_to_log(db:Client, qcoins, student_id, task_id=None):
             results = list(ref.stream())
 
             if not results:
-                current_time = datetime.now()
+                current_time = datetime.now(tz)
                 unique_id = str(current_time.strftime("%Y.%m.%d_%H:%M:%S.%f"))
                 db.collection('logs').document(unique_id).set({
                     "accrual": qcoins,
                     "student": student_ref,
                     "task_id": task_id,
-                    "created_at": datetime.now()
+                    "created_at": datetime.now(tz),
+                    "accrualed_at": datetime.now(tz)
                 })
 
-                return True
+                return unique_id
 
             result = results[0]
             result.reference.update({
-                "accrual": int(qcoins)
+                "accrual": int(qcoins),
+                "accrualed_at": datetime.now(tz)
             })
 
-            return True
+            return result.id
 
         else:
-            current_time = datetime.now()
+            current_time = datetime.now(tz)
             unique_id = str(current_time.strftime("%Y.%m.%d_%H:%M:%S.%f"))
             ref2 = db.collection('logs').document(unique_id)
 
             ref2.set({
                 "accrual": int(qcoins),
                 "student": student_ref,
-                "created_at": datetime.now()
+                "created_at": datetime.now(tz),
+                "accrualed_at": datetime.now(tz)
             })
 
-            return True
+            return unique_id
 
     except Exception as e:
         return False
@@ -599,14 +667,16 @@ def purchase(db: Client, student_id:str, good_id:str):
         price = int(good_dict.get("price"))
 
         if good.exists and balance >= price:
-            current_time = datetime.now()
+            import pytz
+            tz = pytz.timezone("Asia/Almaty")
+            current_time = datetime.now(tz)
             unique_id = str(current_time.strftime("%Y.%m.%d_%H:%M:%S.%f"))
             ref2 = db.collection('logs').document(unique_id)
 
             ref2.set({
                 "good_id": good_ref,
                 "student": student_ref,
-                "created_at": datetime.now(),
+                "created_at": datetime.now(tz),
                 "expenditure": price
             })
 
@@ -632,3 +702,33 @@ def get_good_desc(student_name, good_id, time):
 
     except:
         return None
+
+def delete_good(db: Client, good_id):
+    try:
+        ref = db.collection("shop")\
+                .document(good_id)
+
+        ref.delete()
+        return True
+
+    except:
+        return False
+
+def write_comment(db: Client, log_id:str, comment:str):
+    try:
+        ref = db.collection("logs")\
+                .document(log_id)
+
+        doc = ref.get()
+
+        if not doc.exists:
+            return False
+
+        ref.update({
+            "comment": comment
+        })
+
+        return True
+
+    except:
+        return False

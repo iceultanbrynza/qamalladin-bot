@@ -5,6 +5,7 @@ class ProgressResult(Enum):
     FAILED = "failed"
     FINISHED = "finished"
     STANDSTILL = 'standsill'
+    DUBLICATE = 'dublicate'
 
 class PurchaseResult(Enum):
     SUCCESS = "✅ Успешная покупка!\nС баланса списано: {0}\nКуратор свяжется с тобой для получения награды."
@@ -16,3 +17,4 @@ class AccrualResult(Enum):
     FINE_SUCCESS = "✅ Студенту {0} был оштрафован на {1} qcoins"
     DUBLICATE = "⚠️ Существует два и более студента с именем {0}. Пожалуйста, попробуйте найти нужного студента в списке с инлайн-кнопками"
     FAILED = "⚠️ Студент не найден"
+    VALUE_ERROR = "⚠️ Слишком большое значение"

@@ -1,30 +1,42 @@
 from config import load_config, BotConfig
 from handlers import curator, authorization, admin, student
 
-import asyncio
-
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import Update
 
-async def main():
-    config:BotConfig = load_config()
+from fastapi import FastAPI, Request
 
-    bot = Bot(token=config.token,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    storage = config.storage
-    dp = Dispatcher(storage=storage)
+app = FastAPI()
+config:BotConfig = load_config()
 
-    db = config.database
-    admins = config.admins
+bot = Bot(token=config.token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+storage = config.storage
+dp = Dispatcher(storage=storage)
 
-    dp.workflow_data.update({'db': db, 'admins': admins})
+db = config.database
+admins = config.admins
 
-    dp.include_routers(authorization.router, curator.router, student.router, admin.router)
+dp.workflow_data.update({'db': db, 'admins': admins})
 
+dp.include_routers(authorization.router, curator.router, student.router, admin.router)
+
+WEBHOOK_URL = config.webhook_host + '/webhook'
+
+@app.on_event("startup")
+async def on_startup():
     await bot.delete_webhook(drop_pending_updates=True)
+    await bot.set_webhook(WEBHOOK_URL)
 
-    await dp.start_polling(bot)
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.model_validate(data)
+    await dp.feed_update(bot, update)
+    return {"ok": True}
 
-if __name__=="__main__":
-    asyncio.run(main())
+@app.get("/")
+async def home():
+    return {"status": "running"}

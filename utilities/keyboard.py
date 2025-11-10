@@ -9,12 +9,15 @@ def createCardKeyboard(dict_of_dicts:list):
                                     for id, student in dict_of_dicts if student['name'] and student['surname']
                                     ])
 
+    find = InlineKeyboardButton(text='Найти', callback_data='find:card')
+
     next = InlineKeyboardButton(text='Далее', callback_data='next:card')
 
     back = InlineKeyboardButton(text='Назад', callback_data='back:card')
 
     exit = InlineKeyboardButton(text='Выход', callback_data='exit:card')
 
+    keyboard.inline_keyboard.append([find])
     keyboard.inline_keyboard.append([next])
     keyboard.inline_keyboard.append([back])
     keyboard.inline_keyboard.append([exit])
@@ -72,11 +75,12 @@ def exitKeyboard():
 
 # Магазин
 # Сторона куратора
-def addGoodKeyboard():
+def addGoodKeyboard(good_id):
     keyboard = [
         [InlineKeyboardButton(text="Далее", callback_data=f"next:shop")],
         [InlineKeyboardButton(text="Назад", callback_data=f"back:shop")],
         [InlineKeyboardButton(text="➕ Добавить товар", callback_data=f"add:shop")],
+        [InlineKeyboardButton(text="➖ Удалить товар", callback_data=f"delete:{good_id}")],
         [InlineKeyboardButton(text='Выход', callback_data='exit:card')]
     ]
 
@@ -94,9 +98,30 @@ def addGoodButton():
 def buyGoodKeyboard(good_id):
     keyboard = [
         [InlineKeyboardButton(text="Купить", callback_data=f"buy:{good_id}")],
-        [InlineKeyboardButton(text="Далее", callback_data=f"next:shop")],
-        [InlineKeyboardButton(text="Назад", callback_data=f"back:shop")],
-        [InlineKeyboardButton(text='Выход', callback_data='exit:card')]
+        [InlineKeyboardButton(text="Далее", callback_data=f"shop:next")],
+        [InlineKeyboardButton(text="Назад", callback_data=f"shop:back")],
+        [InlineKeyboardButton(text='Выход', callback_data='shop:exit')]
     ]
 
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def createShopCardKeyboard(dict_of_dicts:list):
+    keyboard = InlineKeyboardMarkup(inline_keyboard =[
+                                        [InlineKeyboardButton(text=f"{good['name']} - {good['price']} qcoins", callback_data=f'good:{id}')]
+                                        for id, good in dict_of_dicts if good['name']
+                                    ])
+    return keyboard
+
+# Комментарии студентам
+def noButton():
+    keyboard = [
+        [InlineKeyboardButton(text="Пропустить", callback_data=f"comment:skip")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def yesnoButton():
+    keyboard = [
+        [InlineKeyboardButton(text="Правильно", callback_data=f"comment:yes")],
+        [InlineKeyboardButton(text="Нет", callback_data=f"comment:no")]
+    ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)

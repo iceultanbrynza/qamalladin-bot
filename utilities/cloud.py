@@ -3,6 +3,8 @@ from datetime import datetime
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 
+import pytz
+
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
@@ -12,7 +14,8 @@ from cloudinary import CloudinaryImage
 from cloudinary import CloudinaryVideo
 
 def upload_file(file:BytesIO, username, task, public_id, format):
-    month = datetime.now().strftime("%B")
+    tz = pytz.timezone("Asia/Almaty")
+    month = datetime.now(tz).strftime("%B")
     folder_path = f'{username}/{month}/{task}'
     response = cloudinary.uploader.upload(file,
                                           asset_folder=folder_path,

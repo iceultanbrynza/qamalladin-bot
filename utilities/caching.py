@@ -26,3 +26,28 @@ async def write_to_redis(group:str, data:list | dict):
 
     else:
         raise TypeError(f"data must be either list or dict. You are tring to load to Redis the data of {type(data)} type")
+
+async def delete_from_redis_by_group(group: str) -> bool:
+    """
+    Удаляет группу (ключ) из Redis, независимо от типа данных.
+    Возвращает True, если ключ был удалён.
+    """
+    try:
+        deleted_count = await redis_client.delete(group)
+        return deleted_count > 0
+    except Exception as e:
+        return False
+
+
+async def delete_from_redis(group, id):
+    """
+    Удаление конкретного товара из кэша с целью оставлять кэш актуальным после удаления
+    """
+    try:
+        res = await redis_client.hdel(group, id)
+        if res == 1:
+            return True
+        else:
+            return False
+    except:
+        return False

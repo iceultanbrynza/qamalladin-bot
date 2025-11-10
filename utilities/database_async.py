@@ -1,5 +1,5 @@
 from .database import *
-from .caching import write_to_redis, read_from_redis
+from .caching import write_to_redis, read_from_redis, delete_from_redis_by_group
 from .cloud import upload_many_async
 
 import asyncio
@@ -22,6 +22,8 @@ async def query_students_async(db: Client):
 async def rewrite_cached_students(db:Client):
     students:dict = await asyncio.to_thread(query_students, db)
     await write_to_redis("students", students)
+    students_tags:list = await asyncio.to_thread(query_students_tags, db)
+    await write_to_redis("students_tags", students_tags)
 
 async def query_students_tags_async(db: Client):
     """
@@ -200,6 +202,34 @@ async def get_good_desc_async(name, good_id, time):
     msg = await asyncio.to_thread(get_good_desc, name, good_id, time)
     return msg
 
-async def rewrite_cached_shop(db:Client):
-    goods:dict = await asyncio.to_thread(query_goods, db)
-    await write_to_redis("shop", goods)
+async def delete_good_async(db: Client, good_id:str):
+    response = await asyncio.to_thread(delete_good, db, good_id)
+    return response
+
+async def write_comment_async(db: Client, log_id:str, comment:str):
+    response = await asyncio.to_thread(write_comment, db, log_id, comment)
+    return response
+
+async def add_curator_async(db, surname, name, telegram):
+    response = await asyncio.to_thread(add_curator, db, surname, name, telegram)
+    await delete_from_redis_by_group("curator_tags")
+    curators:list = await asyncio.to_thread(query_curators_tags, db)
+    await write_to_redis("curator_tags", curators)
+    return response
+
+async def delete_curator_async(db, telegram):
+    response = await asyncio.to_thread(delete_curator, db, telegram)
+    await delete_from_redis_by_group("curator_tags")
+    curators:list = await asyncio.to_thread(query_curators_tags, db)
+    await write_to_redis("curator_tags", curators)
+    return response
+
+async def delete_student_async(db, telegram):
+    response = await asyncio.to_thread(delete_student, db, telegram)
+    await delete_from_redis_by_group("students_tags")
+    await delete_from_redis_by_group("students")
+    students:list = await asyncio.to_thread(query_students_tags, db)
+    await write_to_redis("students_tags", students)
+    students:dict = await asyncio.to_thread(query_students, db)
+    await write_to_redis("students", students)
+    return response

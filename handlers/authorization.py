@@ -33,6 +33,8 @@ async def start(message:Message, state: FSMContext, db):
     elif role == UserRole.STUDENT:
         keyboard = createStudentPanel()
         await message.answer(lexicon['ru']['student']['greeting'], reply_markup=keyboard, resize_keyboard=True)
+        await record_chat_id_async(db, username, role, chat_id)
+        await rewrite_cached_students(db)
 
-    await record_chat_id_async(db, username, role, chat_id)
-    await rewrite_cached_students(db)
+    elif role == UserRole.GUEST:
+        await message.answer(lexicon['ru']['general']['greeting'])
