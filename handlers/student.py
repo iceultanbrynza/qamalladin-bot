@@ -230,6 +230,10 @@ async def get_log_text(logs):
 
         created_at = log.get('created_at')
         dt = datetime.fromisoformat(str(created_at))
+        if dt.tzinfo is None:
+            dt = LOCAL_TZ.localize(dt)
+        else:
+            dt = dt.astimezone(LOCAL_TZ)
         time = dt.strftime("%d %B %Y, %H:%M:%S")
         task_id = log.get('task_id', None)
         accrual = log.get('accrual', None)

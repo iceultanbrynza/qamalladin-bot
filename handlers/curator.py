@@ -383,8 +383,8 @@ async def confirm_comment(callback:CallbackQuery, state:FSMContext, db):
 
     response = await write_comment_async(db, log_id, comment)
     if response:
-        await callback.answer("Комментарий сохранен в логах.")
         await callback.message.delete()
+        await callback.message.answer("Комментарий сохранен в логах.")
 
     else:
         await callback.answer("Не получилось сохранить комментарий(")
@@ -442,7 +442,7 @@ async def manual_fine(message: Message, state:FSMContext, db):
         await message.answer(text=msg)
         if response_state in (AccrualResult.FAILED, AccrualResult.DUBLICATE, AccrualResult.VALUE_ERROR):
             continue
-        
+
         await add_fine_async(db, mode='fio', name=name, surname=surname)
         student_id = await get_student_id_for_curator_async(db, name, surname)
         if student_id:
@@ -456,7 +456,7 @@ async def manual_fine(message: Message, state:FSMContext, db):
 @router.message(F.text, IsInteger(), StateFilter(Form.fine))
 async def writing_fine(message: Message, state:FSMContext, db):
     data = await state.get_data()
-    student_id = data['student_id']
+    student_id = data.get('student_id')
     qcoins = re.search(r"\d+", message.text)
 
     if not qcoins:
@@ -514,8 +514,8 @@ async def confirm_comment(callback:CallbackQuery, state:FSMContext, db):
 
     response = await write_comment_async(db, log_id, comment)
     if response:
-        await callback.answer("Комментарий сохранен в логах.")
         await callback.message.delete()
+        await callback.message.answer("Комментарий сохранен в логах.")
 
     else:
         await callback.answer("Не получилось сохранить комментарий(")
@@ -612,24 +612,49 @@ async def give_back_report(callback:CallbackQuery, state:FSMContext, db):
 async def writing_assess(message: Message, state:FSMContext, db):
     chat_id = message.chat.id
     data = await state.get_data()
-    student_id = data['student_id']
-    task_id = data['task_id']
-    message_id = data['task_message_id']
+    student_id = data.get('student_id')
+    task_id = data.get('task_id')
+    message_id = data.get('task_message_id')
     qcoins = re.search(r"\d+", message.text)
 
-    text = lexicon['ru']['curator']['Curator obtained report'].format(task_id, 'True')
-    await message.bot.edit_message_text(chat_id=chat_id, text=text, message_id=message_id, reply_markup=None)
+    if (not student_id or
+        not task_id or
+        not message_id):
+        await message.answer("Время ответа истекло")
+        return
 
-    response_state, msg = await write_qcoins_async(int(qcoins.group()), db, student_id=student_id)
+    if qcoins:
+        try:
+            qcoins_value = int(qcoins.group())
+
+        except ValueError:
+            await message.answer("Некорректное число. Попробуйте снова.")
+            return
+
+    else:
+        await message.answer("Некорректный ввод. Введите число.")
+        return
+
+    response_state, msg = await write_qcoins_async(qcoins_value, db, student_id=student_id)
     await message.answer(text=msg)
 
     if response_state == AccrualResult.SUCCESS:
+        try:
+            text = lexicon['ru']['curator']['Curator obtained report'].format(task_id, 'True')
+            await message.bot.edit_message_text(chat_id=chat_id, text=text, message_id=message_id, reply_markup=None)
+
+        except Exception as e:
+            await message.answer("Не удалось обновить сообщение с заданием.")
+
         await mark_as_checked_async(db, student_id, task_id)
-        await write_accrual_to_log_async(db, int(qcoins.group()), student_id, task_id)
+        await write_accrual_to_log_async(db, qcoins_value, student_id, task_id)
         progress, msg = await is_balance_per_level_enough(db, student_id)
         chat_id = await get_student_chat_id(db, student_id)
-        if msg is not None:
-            await message.bot.send_message(chat_id=chat_id, text=msg)
+        if chat_id is not None:
+            feedback = lexicon["ru"]["student"]["task is checked"].format(qcoins_value)
+            await message.bot.send_message(chat_id=chat_id, text=feedback)
+            if msg is not None:
+                await message.bot.send_message(chat_id=chat_id, text=msg)
 
 
 # Логгирование
@@ -708,6 +733,10 @@ async def get_log_text(logs):
 
         created_at = log.get('created_at')
         dt = datetime.fromisoformat(str(created_at))
+        if dt.tzinfo is None:
+            dt = LOCAL_TZ.localize(dt)
+        else:
+            dt = dt.astimezone(LOCAL_TZ)
         time = dt.strftime("%d %B %Y, %H:%M:%S")
         task_id = log.get('task_id', None)
         accrual = log.get('accrual', None)
